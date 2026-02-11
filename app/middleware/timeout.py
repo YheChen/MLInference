@@ -8,6 +8,9 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from app.config import REQUEST_TIMEOUT_MS
 from app.metrics.prometheus import REQUEST_TIMEOUTS
+from app.utils.logging import get_logger
+
+logger = get_logger()
 
 
 class TimeoutMiddleware(BaseHTTPMiddleware):
@@ -26,6 +29,13 @@ class TimeoutMiddleware(BaseHTTPMiddleware):
 			)
 		except asyncio.TimeoutError:
 			REQUEST_TIMEOUTS.inc()
+			logger.warning(
+				"request_timeout",
+				extra={
+					"path": request.url.path,
+					"detail": f"exceeded {self._timeout_seconds*1000:.0f}ms deadline",
+				},
+			)
 			return JSONResponse(
 				status_code=status.HTTP_504_GATEWAY_TIMEOUT,
 				content={"detail": "Request timed out"},

@@ -6,6 +6,9 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from app.config import QUEUE_HIGH_WATERMARK
 from app.metrics.prometheus import QUEUE_REJECTIONS
+from app.utils.logging import get_logger
+
+logger = get_logger()
 
 
 class BackpressureMiddleware(BaseHTTPMiddleware):
@@ -34,6 +37,14 @@ class BackpressureMiddleware(BaseHTTPMiddleware):
 
 		if batcher.queue_size >= self._high_watermark:
 			QUEUE_REJECTIONS.inc()
+			logger.warning(
+				"backpressure_reject",
+				extra={
+					"path": request.url.path,
+					"queue_depth": batcher.queue_size,
+					"detail": "queue at high watermark",
+				},
+			)
 			return JSONResponse(
 				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
 				content={"detail": "Server overloaded"},
