@@ -115,37 +115,34 @@ class InferenceUser(HttpUser):
 
 
 # ---------------------------------------------------------------------------
-# Ramp LoadTestShape  (only active when SCENARIO=ramp)
+# Ramp LoadTestShape  (only defined when SCENARIO=ramp)
 # ---------------------------------------------------------------------------
+# Locust auto-discovers any LoadTestShape subclass and uses it to control
+# user spawning.  We must NOT define the class at all for non-ramp scenarios,
+# otherwise Locust ignores the -u / -r CLI flags.
 
-class RampShape(LoadTestShape):
-    """
-    Linear ramp:  0 → peak_users over ramp_duration, then hold for hold_duration.
-    Ignored unless SCENARIO=ramp.
-    """
+if SCENARIO == "ramp":
 
-    peak_users = _env_int("RAMP_PEAK_USERS", 300)
-    ramp_duration = _env_int("RAMP_DURATION_S", 180)    # 3 min ramp
-    hold_duration = _env_int("RAMP_HOLD_S", 120)        # 2 min hold
-    spawn_rate = _env_int("RAMP_SPAWN_RATE", 10)
+    class RampShape(LoadTestShape):
+        """Linear ramp 0 → peak over ramp_duration, then hold."""
 
-    use_common_options = True   # respect -t flag as overall cap
+        peak_users = _env_int("RAMP_PEAK_USERS", 300)
+        ramp_duration = _env_int("RAMP_DURATION_S", 180)    # 3 min ramp
+        hold_duration = _env_int("RAMP_HOLD_S", 120)        # 2 min hold
+        spawn_rate = _env_int("RAMP_SPAWN_RATE", 10)
 
-    def tick(self):
-        if SCENARIO != "ramp":
-            # Returning None on the first tick disables the shape entirely
-            # and lets Locust fall back to the default -u / -r behaviour.
-            return None
+        use_common_options = True   # respect -t flag as overall cap
 
-        run_time = self.get_run_time()
-        total = self.ramp_duration + self.hold_duration
+        def tick(self):
+            run_time = self.get_run_time()
+            total = self.ramp_duration + self.hold_duration
 
-        if run_time > total:
-            return None  # stop
+            if run_time > total:
+                return None  # stop
 
-        if run_time < self.ramp_duration:
-            users = max(1, math.ceil(self.peak_users * run_time / self.ramp_duration))
-        else:
-            users = self.peak_users
+            if run_time < self.ramp_duration:
+                users = max(1, math.ceil(self.peak_users * run_time / self.ramp_duration))
+            else:
+                users = self.peak_users
 
-        return users, self.spawn_rate
+            return users, self.spawn_rate

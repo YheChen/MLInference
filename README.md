@@ -121,16 +121,14 @@ python load_test/report_latency.py --prom http://localhost:9090 --range 2m
 > **Model**: sklearn LogisticRegression, 10 features  
 > **Test**: `SCENARIO=steady`, 50 users, 2 min
 
-| Metric           | Target         | Observed          |
-| ---------------- | -------------- | ----------------- |
-| p50              | —              | _run and fill in_ |
-| p95              | ≤ 50 ms        | _run and fill in_ |
-| p99              | —              | _run and fill in_ |
-| Throughput       | —              | _run and fill in_ |
-| Rejections (503) | 0 under steady | _run and fill in_ |
-| Timeouts (504)   | 0 under steady | _run and fill in_ |
-
-> Fill these in after running the load test. Use `python load_test/report_latency.py` to auto-generate the numbers from Prometheus.
+| Metric           | Target         | Observed   |
+| ---------------- | -------------- | ---------- |
+| p50              | —              | 7 ms       |
+| p95              | ≤ 50 ms        | 14 ms ✅   |
+| p99              | —              | 29 ms      |
+| Throughput       | —              | ~458 req/s |
+| Rejections (503) | 0 under steady | 0          |
+| Timeouts (504)   | 0 under steady | 0          |
 
 ---
 

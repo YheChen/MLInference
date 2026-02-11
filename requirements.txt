@@ -6,3 +6,8 @@ joblib
 prometheus-client
 pydantic
 locust
+
+# Testing
+pytest
+pytest-asyncio
+httpx
