@@ -2,6 +2,10 @@
 
 MODEL_PATH = "app/model/model.pkl"
 
+# Number of features the trained model expects. Requests are validated against
+# this at the API boundary so malformed input can never reach the batcher.
+FEATURE_DIM = 10
+
 BATCH_MAX_SIZE = 32
 BATCH_WINDOW_MS = 5
 

@@ -7,6 +7,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from app.config import FEATURE_DIM
 from app.inference.batcher import OverloadedError
 from app.metrics.prometheus import REQUEST_LATENCY_SECONDS
 from app.utils.logging import generate_request_id, get_logger
@@ -17,7 +18,15 @@ router = APIRouter()
 
 
 class PredictRequest(BaseModel):
-    features: List[float] = Field(..., min_length=1)
+    # Exactly FEATURE_DIM values. Enforcing the width here means a wrong-sized
+    # payload is a 422 for the sender alone, rather than an error raised while
+    # stacking a batch that also contains other clients' valid requests.
+    features: List[float] = Field(
+        ...,
+        min_length=FEATURE_DIM,
+        max_length=FEATURE_DIM,
+        description=f"Exactly {FEATURE_DIM} float features.",
+    )
 
 
 class PredictResponse(BaseModel):
@@ -25,7 +34,18 @@ class PredictResponse(BaseModel):
 
 
 @router.get("/health")
-async def health() -> dict:
+async def health(request: Request) -> dict:
+    """Liveness probe.
+
+    Reports unhealthy when the batch loop has died, which is otherwise invisible:
+    the queue keeps accepting requests that will never be served.
+    """
+    batcher = getattr(request.app.state, "batcher", None)
+    if batcher is None or not batcher.is_healthy:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Inference pipeline unavailable",
+        )
     return {"status": "ok"}
 
 

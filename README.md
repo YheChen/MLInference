@@ -77,6 +77,9 @@ curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
   -d '{"features": [0.1, -0.3, 0.5, 1.2, -0.7, 0.0, 0.8, -1.1, 0.4, 0.6]}'
 # → {"pred": 0.732...}
+#
+# `features` must contain exactly 10 floats (the model's input width);
+# any other length is rejected with 422.
 ```
 
 ### 4. Run with Docker Compose (app + Prometheus)
@@ -171,7 +174,7 @@ histogram_quantile(0.95, rate(inference_batch_latency_seconds_bucket[2m]))
 | ------------------- | ----------------------- |
 | p95 request latency | ≤ 50 ms                 |
 | Error rate (5xx)    | < 1 % under normal load |
-| Availability        | `/health` returns 200   |
+| Availability        | `/health` returns 200 (`503` if the batch loop has died) |
 
 ### Overload Signals
 
@@ -190,6 +193,9 @@ histogram_quantile(0.95, rate(inference_batch_latency_seconds_bucket[2m]))
 | Queue full             | `enqueue()` raises `OverloadedError` → client sees `503`. | Expected under extreme load — load shedding by design.            |
 | Inference thread hangs | Timeout middleware returns `504` after 100 ms.            | Investigate model or data issues.                                 |
 | Prometheus down        | App continues serving; metrics are lost.                  | Prometheus is decoupled — no impact on inference.                 |
+| Wrong feature count    | Rejected with `422` at the API boundary; never enters a batch. | `features` must be exactly 10 floats.                          |
+| Batch raises unexpectedly | That batch's callers get a fast error; the loop survives and keeps serving. | Check `batch_failed` entries in the error logs.             |
+| Batch loop dies        | `/health` flips to `503` so the orchestrator restarts the container. | Check `batch_failed` entries in the error logs.                |
 
 ### Log Fields (structured JSON)
 
