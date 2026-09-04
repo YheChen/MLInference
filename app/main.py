@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.api.routes import router as api_router
@@ -5,25 +7,16 @@ from app.inference.batcher import InferenceBatcher
 from app.inference.predictor import Predictor
 from app.metrics.prometheus import metrics_router
 from app.middleware.backpressure import BackpressureMiddleware
+from app.middleware.metrics import MetricsMiddleware
 from app.middleware.timeout import TimeoutMiddleware
 from app.utils.logging import setup_logging
 
 
 def create_app() -> FastAPI:
     logger = setup_logging()
-    app = FastAPI(title="ML Inference Service", version="0.1.0")
 
-    app.add_middleware(TimeoutMiddleware)
-    app.add_middleware(BackpressureMiddleware)
-
-    # API routes
-    app.include_router(api_router)
-
-    # Metrics endpoint
-    app.include_router(metrics_router)
-
-    @app.on_event("startup")
-    async def on_startup() -> None:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         from app.model.loader import load_model
 
         model = load_model()
@@ -38,12 +31,27 @@ def create_app() -> FastAPI:
             "detail": "model loaded, batcher started",
         })
 
-    @app.on_event("shutdown")
-    async def on_shutdown() -> None:
-        batcher = getattr(app.state, "batcher", None)
-        if batcher is not None:
+        try:
+            yield
+        finally:
             await batcher.stop()
-        logger.info("Shutdown complete")
+            logger.info("Shutdown complete")
+
+    app = FastAPI(title="ML Inference Service", version="0.1.0", lifespan=lifespan)
+
+    # Starlette applies the most recently added middleware outermost, so this
+    # registration order runs as: metrics -> backpressure -> timeout -> routes.
+    # Metrics must be outermost to observe shed and timed-out requests, which
+    # never reach the handler.
+    app.add_middleware(TimeoutMiddleware)
+    app.add_middleware(BackpressureMiddleware)
+    app.add_middleware(MetricsMiddleware)
+
+    # API routes
+    app.include_router(api_router)
+
+    # Metrics endpoint
+    app.include_router(metrics_router)
 
     return app
 

@@ -6,10 +6,20 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # python:*-slim does not ship curl, so the previous curl-based check could
+      # never pass and the container sat permanently unhealthy. Use the
+      # interpreter that is guaranteed to be present.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request as u,sys;sys.exit(0 if u.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)",
+        ]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 3
+      start_period: 15s
 
   prometheus:
     image: prom/prometheus:v2.51.0
@@ -18,4 +28,5 @@ services:
     ports:
       - "9090:9090"
     depends_on:
-      - app
+      app:
+        condition: service_healthy

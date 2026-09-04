@@ -4,12 +4,14 @@ import joblib
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 
+from app.config import FEATURE_DIM, MODEL_PATH
+
 
 def main() -> None:
     rng = np.random.default_rng(0)
 
     n = 5000
-    d = 10
+    d = FEATURE_DIM
     X = rng.normal(size=(n, d))
     w = rng.normal(size=(d,))
     logits = X @ w
@@ -22,7 +24,9 @@ def main() -> None:
     model = LogisticRegression(max_iter=200)
     model.fit(X_train, y_train)
 
-    out_path = os.path.join("app", "model", "model.pkl")
+    # Same path the service loads from, so training and serving can never
+    # disagree about where the artifact lives.
+    out_path = MODEL_PATH
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     joblib.dump(model, out_path)
 

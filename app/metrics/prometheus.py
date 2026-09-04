@@ -40,6 +40,17 @@ REQUEST_TIMEOUTS = Counter(
     "Total requests terminated by the timeout middleware",
 )
 
+REQUESTS_TOTAL = Counter(
+    "inference_requests_total",
+    "Total /predict requests by response status code",
+    ["status"],
+)
+
+BATCH_DROPPED = Counter(
+    "inference_batch_dropped_total",
+    "Requests dropped before inference because the caller had already gone away",
+)
+
 metrics_router = APIRouter()
 
 

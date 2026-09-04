@@ -10,6 +10,7 @@ import numpy as np
 from app.config import BATCH_MAX_SIZE, BATCH_WINDOW_MS, QUEUE_MAX_SIZE
 from app.inference.predictor import Predictor
 from app.metrics.prometheus import (
+	BATCH_DROPPED,
 	BATCH_LATENCY_SECONDS,
 	BATCH_SIZE,
 	QUEUE_DEPTH,
@@ -142,6 +143,14 @@ class InferenceBatcher:
 		if not batch:
 			return
 
+		# A future that is already done belongs to a caller who has gone away —
+		# the timeout middleware cancelled it while the item sat in the queue.
+		# Inferring it would burn model time on a response nobody can receive,
+		# which is precisely the wrong thing to do while overloaded.
+		batch = self._drop_abandoned(batch)
+		if not batch:
+			return
+
 		BATCH_SIZE.observe(len(batch))
 		start = time.perf_counter()
 
@@ -175,6 +184,15 @@ class InferenceBatcher:
 				item.future.set_result(float(value))
 
 		QUEUE_DEPTH.set(self._queue.qsize())
+
+	@staticmethod
+	def _drop_abandoned(batch: List[_BatchItem]) -> List[_BatchItem]:
+		"""Return only the items whose caller is still waiting for a result."""
+		live = [item for item in batch if not item.future.done()]
+		dropped = len(batch) - len(live)
+		if dropped:
+			BATCH_DROPPED.inc(dropped)
+		return live
 
 	@staticmethod
 	def _fail_batch(batch: List[_BatchItem], exc: BaseException) -> None:
