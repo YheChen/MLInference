@@ -36,8 +36,9 @@ Build a production-style ML inference service that demonstrates systems engineer
 ┌──────────────────────────────────────┐
 │  FastAPI  (single uvicorn worker)    │
 │  ┌──────────────────────────────┐    │
-│  │ TimeoutMiddleware  (100 ms)  │    │
+│  │ MetricsMiddleware (outermost)│    │
 │  │ BackpressureMiddleware (80%) │    │
+│  │ TimeoutMiddleware  (100 ms)  │    │
 │  └──────────┬───────────────────┘    │
 │             │                        │
 │  ┌──────────▼───────────────────┐    │
@@ -68,6 +69,7 @@ Build a production-style ML inference service that demonstrates systems engineer
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **TimeoutMiddleware**      | Hard 100 ms deadline on every request. Returns `504` if breached. Prevents slow requests from consuming resources indefinitely.                                                                |
 | **BackpressureMiddleware** | Monitors batcher queue depth. Rejects new `/predict` requests with `503` once the queue crosses 80 % of capacity. Sheds load before the queue is completely full.                              |
+| **MetricsMiddleware**      | Outermost middleware. Observes end-to-end latency and counts the outcome of every `/predict` request, including those shed (`503`) or timed out (`504`) before reaching the handler.                     |
 | **InferenceBatcher**       | Background `asyncio.Task` that collects incoming requests into batches. Uses a 5 ms window and max-batch-size of 32. Each caller awaits an `asyncio.Future` resolved when its batch completes. |
 | **Predictor**              | Thin wrapper around the sklearn model. Runs synchronous `predict_proba()` in `asyncio.to_thread` to avoid blocking the event loop.                                                             |
 | **Prometheus metrics**     | Histograms for request latency, batch size, and batch inference time. Gauge for queue depth. Counters for rejections and timeouts.                                                             |
@@ -126,6 +128,9 @@ Simplicity. A single worker keeps all state (model, batcher queue, Prometheus co
 | Model inference becomes slow    | Batch latency rises → timeout middleware fires `504`. | Monitor `inference_batch_latency_seconds`. Investigate model/data drift.                     |
 | Memory leak in batcher          | Queue depth stays near max even under low load.       | Monitor `inference_queue_depth`. If consistently high, check for futures not being resolved. |
 | Prometheus scrape fails         | Metrics stop updating. No impact on inference.        | Alert on Prometheus target health.                                                           |
+| Wrong feature count in a request | `422` at the API boundary.                            | Validated against `FEATURE_DIM`; never reaches a batch.                                      |
+| A batch raises unexpectedly     | That batch's callers get a fast error.                | The loop logs `batch_failed` and continues; it does not die.                                 |
+| Batch loop dies                 | `/health` returns `503`.                              | Orchestrator restarts the container.                                                         |
 
 ---
 
@@ -141,6 +146,8 @@ Simplicity. A single worker keeps all state (model, batcher queue, Prometheus co
 | `inference_queue_depth`             | Gauge     | Current queue occupancy — primary overload indicator.             |
 | `inference_queue_rejections_total`  | Counter   | Requests rejected by backpressure or queue-full.                  |
 | `inference_request_timeouts_total`  | Counter   | Requests killed by the timeout middleware.                        |
+| `inference_requests_total`          | Counter   | `/predict` outcomes by status code (200 / 422 / 503 / 504).       |
+| `inference_batch_dropped_total`     | Counter   | Work discarded before inference — the caller had already gone.    |
 
 ### Key PromQL queries
 
@@ -178,3 +185,6 @@ p95 = 14 ms — well within the 50 ms SLA target.
 - **Model versioning**: support hot-swapping models without downtime.
 - **Grafana dashboard**: pre-built dashboard JSON for the metrics above.
 - **Integration tests**: automated end-to-end test that starts the server, runs a short Locust scenario, and asserts p95 < 50 ms in CI.
+- **Per-item batch isolation**: a batch currently fails as a unit. Grouping by
+  feature shape, or catching per item, would let one bad request fail alone.
+  Input validation makes this unreachable through the API today.

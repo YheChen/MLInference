@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 from app.config import FEATURE_DIM
 from app.inference.batcher import OverloadedError
-from app.metrics.prometheus import REQUEST_LATENCY_SECONDS
 from app.utils.logging import generate_request_id, get_logger
 
 logger = get_logger()
@@ -73,7 +72,6 @@ async def predict(req: PredictRequest, request: Request) -> PredictResponse:
         ) from exc
     finally:
         latency_ms = (time.perf_counter() - start) * 1000
-        REQUEST_LATENCY_SECONDS.observe(latency_ms / 1000)
         queue_depth = getattr(
             getattr(request.app.state, "batcher", None), "queue_size", None
         )

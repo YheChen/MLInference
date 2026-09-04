@@ -11,8 +11,9 @@ The model is intentionally trivial (logistic regression). The interesting work i
 ```
                 ┌────────────┐
   HTTP POST ──▶│  FastAPI    │
-  /predict     │  Middleware │  ← TimeoutMiddleware (100 ms hard cap)
+  /predict     │  Middleware │  ← MetricsMiddleware (latency + outcome, outermost)
                │             │  ← BackpressureMiddleware (queue high-watermark)
+               │             │  ← TimeoutMiddleware (100 ms hard cap)
                └─────┬──────┘
                      │
                ┌─────▼──────┐
@@ -51,6 +52,7 @@ The model is intentionally trivial (logistic regression). The interesting work i
 | **Hard 100 ms timeout**     | Guarantees worst-case client latency; any request stuck in the queue past the deadline gets a `504`.                        |
 | **Structured JSON logging** | One JSON object per log line — trivial to ingest into ELK / CloudWatch / any aggregator.                                    |
 | **Prometheus histograms**   | Histogram buckets let you compute arbitrary percentiles server-side with `histogram_quantile`.                              |
+| **Metrics middleware outermost** | Requests shed by backpressure or killed by the timeout never reach the handler; observing latency there would omit exactly the traffic that matters under overload. |
 | **Single uvicorn worker**   | Keeps the demo simple and avoids shared-state complexity; real deployments would scale horizontally behind a load balancer. |
 
 ---
@@ -63,6 +65,9 @@ The model is intentionally trivial (logistic regression). The interesting work i
 python -m training.train
 # → Saved model to app/model/model.pkl
 ```
+
+The trained artifact is a build output and is not committed, so this step is
+required before the server will start. The Docker build runs it for you.
 
 ### 2. Run the server
 
@@ -93,6 +98,26 @@ docker compose -f docker/docker-compose.yml up --build
 
 Verify Prometheus is scraping the app:  
 Prometheus → Status → Targets → `ml-inference` should be **UP**.
+
+---
+
+## Configuration
+
+Every knob in `app/config.py` reads an environment variable of the same name and
+falls back to the default below. See `.env.example` for the annotated list.
+
+| Variable                     | Default                     | Purpose                                        |
+| ---------------------------- | --------------------------- | ---------------------------------------------- |
+| `MODEL_PATH`                 | `<repo>/app/model/model.pkl` | Trained artifact to load at startup.           |
+| `FEATURE_DIM`                | `10`                        | Required feature count; other widths get 422.  |
+| `BATCH_MAX_SIZE`             | `32`                        | Upper bound on requests per batch.             |
+| `BATCH_WINDOW_MS`            | `5`                         | How long a partial batch waits to fill.        |
+| `QUEUE_MAX_SIZE`             | `2000`                      | Bounded queue capacity.                        |
+| `QUEUE_HIGH_WATERMARK_RATIO` | `0.8`                       | Fraction of capacity at which shedding starts. |
+| `REQUEST_TIMEOUT_MS`         | `100`                       | Hard per-request deadline.                     |
+
+`MODEL_PATH` resolves against the repo root, so the server starts correctly from
+any working directory.
 
 ---
 
@@ -157,6 +182,12 @@ rate(inference_queue_rejections_total[1m])
 # Timeout rate
 rate(inference_request_timeouts_total[1m])
 
+# Request outcomes — success vs shed vs timed out
+sum by (status) (rate(inference_requests_total[1m]))
+
+# Work discarded before inference because the caller had already timed out
+rate(inference_batch_dropped_total[1m])
+
 # Average batch size
 rate(inference_batch_size_sum[1m]) / rate(inference_batch_size_count[1m])
 
@@ -183,6 +214,7 @@ histogram_quantile(0.95, rate(inference_batch_latency_seconds_bucket[2m]))
 | Queue depth rising  | `inference_queue_depth` > 1 600             | Back-pressure middleware starts rejecting (automatic). Scale horizontally or reduce traffic. |
 | Rejections spiking  | `inference_queue_rejections_total` rate > 0 | Upstream is sending more than the service can absorb. Add replicas or increase queue size.   |
 | Timeouts spiking    | `inference_request_timeouts_total` rate > 0 | Batches are taking too long. Check model latency (`inference_batch_latency_seconds`).        |
+| Work being discarded | `inference_batch_dropped_total` rate > 0     | Callers are timing out while queued. Batches are too slow or the queue is too deep.           |
 | p95 approaching SLA | `histogram_quantile(0.95, ...)` > 40 ms     | Warning zone. Investigate queue depth and batch latency.                                     |
 
 ### Failure Modes
@@ -251,6 +283,7 @@ app/
   inference/predictor.py – Thin model wrapper
   model/loader.py      – Loads model.pkl at startup
   metrics/prometheus.py – Histogram / Gauge / Counter definitions
+  middleware/metrics.py – Request latency + outcome counters (outermost)
   middleware/backpressure.py – Early rejection at queue high-watermark
   middleware/timeout.py – Hard 100 ms deadline per request
   utils/logging.py     – Structured JSON logger
